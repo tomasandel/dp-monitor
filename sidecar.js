@@ -16,6 +16,7 @@ const path = require("path");
 
 const BACKEND_URL = process.env.BACKEND_URL;
 const MONITOR_ID = process.env.MONITOR_ID || "monitor-default";
+const MONITOR_API_KEY = process.env.MONITOR_API_KEY;
 const STATE_DIR = process.env.CERTSPOTTER_STATE_DIR || "/var/lib/certspotter";
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || "30000", 10);
 
@@ -83,9 +84,12 @@ async function pushSth(logIdBase64Url, sth) {
     monitor_id: MONITOR_ID,
   };
 
+  const headers = { "Content-Type": "application/json" };
+  if (MONITOR_API_KEY) headers["Authorization"] = `Bearer ${MONITOR_API_KEY}`;
+
   const response = await fetch(`${BACKEND_URL}/api/sth`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers,
     body: JSON.stringify(payload),
   });
 
