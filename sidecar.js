@@ -73,8 +73,11 @@ async function scanAndPush() {
  * @param {object} sth - Parsed STH JSON from certspotter
  */
 async function pushSth(logIdBase64Url, sth) {
-  // Convert base64url to standard base64 for consistency with CT log list format
-  const logId = logIdBase64Url.replace(/-/g, "+").replace(/_/g, "/");
+  // Convert base64url to standard padded base64 (matching Google's log_list.json format)
+  let logId = logIdBase64Url.replace(/-/g, "+").replace(/_/g, "/");
+  // Restore padding stripped by base64url encoding
+  const pad = (4 - (logId.length % 4)) % 4;
+  if (pad) logId += "=".repeat(pad);
 
   const payload = {
     log_id: logId,
