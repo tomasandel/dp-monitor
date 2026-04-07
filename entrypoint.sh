@@ -8,7 +8,7 @@ echo "[Entrypoint] BACKEND_URL=${BACKEND_URL}"
 # Start certspotter daemon in background
 # -start_at_end: don't download historical entries, start from current log state
 # -verbose: log activity to stderr
-certspotter -state_dir /var/lib/certspotter -watchlist /var/lib/certspotter/watchlist -loglist "${CT_LOG_LIST_URL}" -start_at_end -stdout -verbose &
+certspotter -state_dir /var/lib/certspotter -watchlist /var/lib/certspotter/watchlist -logs "${CT_LOG_LIST_URL}" -start_at_end -stdout -verbose &
 CERTSPOTTER_PID=$!
 
 # Wait briefly for certspotter to create state directory structure
