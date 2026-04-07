@@ -2,6 +2,12 @@ services:
   monitor:
     build: .
     restart: unless-stopped
+    network_mode: host
+    extra_hosts:
+      - "loga.jvgc-a.com:127.0.0.1"
+      - "logb.jvgc-a.com:127.0.0.1"
+      - "logs.jvgc-a.com:127.0.0.1"
+      - "api.jvgc-a.com:127.0.0.1"
     environment:
       BACKEND_URL: ${BACKEND_URL}
       MONITOR_ID: ${MONITOR_ID}
