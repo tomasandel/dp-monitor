@@ -1,14 +1,13 @@
 /**
  * Certspotter Sidecar
  *
- * Watches certspotter's state directory for new STH files
- * and pushes them to the backend API.
+ * Watches certspotter's state directory for STH data
+ * and pushes it to the backend API.
  *
- * Certspotter stores STHs at:
- *   {STATE_DIR}/logs/{logID_base64url}/unverified_sths/{treeSize}-{hash}.json
- *
- * Each JSON file contains:
- *   { tree_size, timestamp, sha256_root_hash, tree_head_signature }
+ * Two sources of STH data:
+ *   1. unverified_sths/{treeSize}-{hash}.json — pending verification
+ *   2. state.json → verified_sth — already verified (small logs clear
+ *      unverified_sths almost instantly, so we also read the verified STH)
  */
 
 const fs = require("fs");
@@ -25,11 +24,11 @@ if (!BACKEND_URL) {
   process.exit(1);
 }
 
-/** Track already-pushed STH files to avoid duplicates */
-const pushedFiles = new Set();
+/** Track already-pushed STHs to avoid duplicates: logId -> "tree_size:root_hash" */
+const lastPushed = new Map();
 
 /**
- * Scans all log directories for new STH files and pushes them to backend.
+ * Scans all log directories for STH data and pushes to backend.
  */
 async function scanAndPush() {
   const logsDir = path.join(STATE_DIR, "logs");
@@ -45,37 +44,46 @@ async function scanAndPush() {
     if (!logDir.isDirectory() || logDir.name.startsWith(".")) continue;
 
     const logId = logDir.name; // base64url-encoded log ID
-    const sthDir = path.join(logsDir, logId, "unverified_sths");
+    const logPath = path.join(logsDir, logId);
 
-    if (!fs.existsSync(sthDir)) continue;
+    // Source 1: unverified STH files (large logs where verification takes time)
+    const sthDir = path.join(logPath, "unverified_sths");
+    if (fs.existsSync(sthDir)) {
+      const sthFiles = fs.readdirSync(sthDir).filter((f) => f.endsWith(".json"));
+      for (const sthFile of sthFiles) {
+        try {
+          const data = JSON.parse(fs.readFileSync(path.join(sthDir, sthFile), "utf-8"));
+          await maybePushSth(logId, data);
+        } catch (err) {
+          console.error(`[Sidecar] Error processing ${sthFile}:`, err.message);
+        }
+      }
+    }
 
-    const sthFiles = fs.readdirSync(sthDir).filter((f) => f.endsWith(".json"));
-
-    for (const sthFile of sthFiles) {
-      const filePath = path.join(sthDir, sthFile);
-
-      if (pushedFiles.has(filePath)) continue;
-
+    // Source 2: verified STH from state.json (small logs where verification is instant)
+    const stateFile = path.join(logPath, "state.json");
+    if (fs.existsSync(stateFile)) {
       try {
-        const data = JSON.parse(fs.readFileSync(filePath, "utf-8"));
-        await pushSth(logId, data);
-        pushedFiles.add(filePath);
+        const state = JSON.parse(fs.readFileSync(stateFile, "utf-8"));
+        if (state.verified_sth) {
+          await maybePushSth(logId, state.verified_sth);
+        }
       } catch (err) {
-        console.error(`[Sidecar] Error processing ${filePath}:`, err.message);
+        console.error(`[Sidecar] Error reading state for ${logId}:`, err.message);
       }
     }
   }
 }
 
 /**
- * Pushes a single STH to the backend API.
- * @param {string} logIdBase64Url - Base64url-encoded log ID (directory name)
- * @param {object} sth - Parsed STH JSON from certspotter
+ * Pushes an STH to the backend if it's new (different tree_size or root_hash).
  */
-async function pushSth(logIdBase64Url, sth) {
+async function maybePushSth(logIdBase64Url, sth) {
+  const key = `${sth.tree_size}:${sth.sha256_root_hash}`;
+  if (lastPushed.get(logIdBase64Url) === key) return;
+
   // Convert base64url to standard padded base64 (matching Google's log_list.json format)
   let logId = logIdBase64Url.replace(/-/g, "+").replace(/_/g, "/");
-  // Restore padding stripped by base64url encoding
   const pad = (4 - (logId.length % 4)) % 4;
   if (pad) logId += "=".repeat(pad);
 
@@ -100,21 +108,10 @@ async function pushSth(logIdBase64Url, sth) {
     throw new Error(`Backend returned ${response.status}: ${await response.text()}`);
   }
 
+  lastPushed.set(logIdBase64Url, key);
   console.log(
     `[Sidecar] Pushed STH for log ${logId.substring(0, 16)}... tree_size=${sth.tree_size}`
   );
-}
-
-/**
- * Cleanup: remove tracked files that no longer exist on disk
- * (certspotter removes STH files after verification)
- */
-function cleanupTracked() {
-  for (const filePath of pushedFiles) {
-    if (!fs.existsSync(filePath)) {
-      pushedFiles.delete(filePath);
-    }
-  }
 }
 
 // Main loop
@@ -126,7 +123,6 @@ async function loop() {
   while (true) {
     try {
       await scanAndPush();
-      cleanupTracked();
     } catch (err) {
       console.error("[Sidecar] Scan error:", err.message);
     }
