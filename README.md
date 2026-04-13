@@ -6,7 +6,7 @@ CT log monitor that polls Signed Tree Heads (STHs) from Certificate Transparency
 
 - Runs certspotter to track CT log state (tree size, root hash)
 - A Node.js sidecar reads certspotter's state files and periodically sends verified STHs to the backend API
-- Multiple monitor instances can run independently - the backend compares their STH reports for consistency
+- Multiple monitor instances can run independently, each submitting STHs with a unique monitor ID
 
 ## Prerequisites
 
