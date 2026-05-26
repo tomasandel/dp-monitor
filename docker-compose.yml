@@ -1,7 +1,14 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   monitor:
     build: .
     restart: unless-stopped
+    logging: *default-logging
     network_mode: host
     extra_hosts:
       - "loga.jvgc-a.com:127.0.0.1"
@@ -14,3 +21,9 @@ services:
       POLL_INTERVAL_MS: ${POLL_INTERVAL_MS}
       MONITOR_API_KEY: ${MONITOR_API_KEY}
       CT_LOG_LIST_URL: ${CT_LOG_LIST_URL}
+      UNVERIFIED_STH_MAX_AGE_MS: ${UNVERIFIED_STH_MAX_AGE_MS:-21600000}
+    volumes:
+      - certspotter-state:/var/lib/certspotter
+
+volumes:
+  certspotter-state:

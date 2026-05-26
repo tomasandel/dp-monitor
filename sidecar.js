@@ -18,6 +18,15 @@ const MONITOR_ID = process.env.MONITOR_ID || "monitor-default";
 const MONITOR_API_KEY = process.env.MONITOR_API_KEY;
 const STATE_DIR = process.env.CERTSPOTTER_STATE_DIR || "/var/lib/certspotter";
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || "30000", 10);
+// Stale unverified STH files (certspotter never finished verifying them — e.g.
+// log is unreachable, sidecar pushed them already, or verification is stuck).
+// Default 6h: certspotter normally verifies within minutes; anything older is
+// effectively orphaned and just wastes disk.
+const UNVERIFIED_STH_MAX_AGE_MS = parseInt(
+  process.env.UNVERIFIED_STH_MAX_AGE_MS || `${6 * 60 * 60 * 1000}`,
+  10
+);
+const CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
 
 if (!BACKEND_URL) {
   console.error("[Sidecar] BACKEND_URL environment variable is required");
@@ -114,10 +123,56 @@ async function maybePushSth(logIdBase64Url, sth) {
   );
 }
 
+/**
+ * Removes unverified STH files older than UNVERIFIED_STH_MAX_AGE_MS.
+ * certspotter normally moves verified STHs to state.json and deletes them
+ * from unverified_sths/ within minutes; files that linger past the cutoff
+ * are stuck (log unreachable, verification failed, etc.) and just waste disk.
+ * Safe to delete behind certspotter's back: it'll re-fetch on the next poll
+ * if it still needs them.
+ */
+function cleanupStaleUnverifiedSths() {
+  const logsDir = path.join(STATE_DIR, "logs");
+  if (!fs.existsSync(logsDir)) return;
+
+  const cutoff = Date.now() - UNVERIFIED_STH_MAX_AGE_MS;
+  let deleted = 0;
+
+  for (const logDir of fs.readdirSync(logsDir, { withFileTypes: true })) {
+    if (!logDir.isDirectory() || logDir.name.startsWith(".")) continue;
+    const sthDir = path.join(logsDir, logDir.name, "unverified_sths");
+    if (!fs.existsSync(sthDir)) continue;
+
+    for (const file of fs.readdirSync(sthDir)) {
+      if (!file.endsWith(".json")) continue; // skip certspotter's .tmp.* files
+      const filePath = path.join(sthDir, file);
+      try {
+        if (fs.statSync(filePath).mtimeMs < cutoff) {
+          fs.unlinkSync(filePath);
+          deleted++;
+        }
+      } catch (err) {
+        // file vanished mid-iteration — fine, certspotter cleaned it up
+        if (err.code !== "ENOENT") {
+          console.error(`[Cleanup] Error processing ${filePath}:`, err.message);
+        }
+      }
+    }
+  }
+
+  if (deleted > 0) {
+    const ageHours = (UNVERIFIED_STH_MAX_AGE_MS / 3600000).toFixed(1);
+    console.log(`[Cleanup] Removed ${deleted} unverified STH files older than ${ageHours}h`);
+  }
+}
+
 // Main loop
 console.log(`[Sidecar] Starting - backend=${BACKEND_URL} monitor=${MONITOR_ID}`);
 console.log(`[Sidecar] Watching state dir: ${STATE_DIR}`);
 console.log(`[Sidecar] Poll interval: ${POLL_INTERVAL_MS}ms`);
+console.log(
+  `[Sidecar] Unverified STH cleanup: max age ${UNVERIFIED_STH_MAX_AGE_MS}ms, interval ${CLEANUP_INTERVAL_MS}ms`
+);
 
 async function loop() {
   while (true) {
@@ -129,5 +184,9 @@ async function loop() {
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
   }
 }
+
+// Run cleanup once at startup, then on a slow interval
+cleanupStaleUnverifiedSths();
+setInterval(cleanupStaleUnverifiedSths, CLEANUP_INTERVAL_MS);
 
 loop();
